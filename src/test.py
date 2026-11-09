@@ -1,147 +1,85 @@
-import gzip
-import os
-import json
 import glob
+import gzip
+import json
+import random
 from collections import Counter
 import matplotlib.pyplot as plt
-import plotly.express as px
-import pandas as pd
-import random
-
-#config data import
+#local
 from src.config import DATA_DIR, DAY
+from src.adsb_io import list_trace_files, load_trace, iter_points
 
 
-def format_check():
-    files = glob.glob(str(DATA_DIR / DAY / "traces" / "*" / "trace_full_*.json"))
-    print(len(files), "aircraft files")
 
-    with gzip.open(files[0], "rt") as fh:
-        d = json.load(fh)
+def run_sanity_checks(sample_files=5000, seed=42):
+    """sample_files=None processes every aircraft file (slow for a full day)."""
+    all_files = list_trace_files()
+    #temp
+    sample_files=len(all_files)
+    print(f"Found {len(all_files)} aircraft files.")
 
-    print(d.keys())
-    for p in d["trace"][:5]:
-        print(p)
+    if sample_files is not None and sample_files < len(all_files):
+        random.seed(seed)
+        files = random.sample(all_files, sample_files)  # random, not first N
+    else:
+        files = all_files
+    print(f"Processing {len(files)} files...")
 
+    nacp_counts = Counter()
+    version_counts = Counter()
+    files_with_nacp = 0
+    total_points = 0
 
-def run_adsb_sanity_checks(sample_files=1000):
-    all_files = glob.glob(str(DATA_DIR / DAY / "traces" / "*" / "trace_full_*.json"))
-    file_paths = all_files[:sample_files]
-
-    total_files = len(file_paths)
-    files_with_nacp_count = 0
-
-    nacp_values = []
-    versions = Counter()
-
-    world_lats = []
-    world_lons = []
-
-    print(f"Found {len(all_files)} total files.")
-    print(f"Processing a sample of {total_files} aircraft files...")
-
-    for filepath in file_paths:
-        try:
-            with gzip.open(filepath, 'rt', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception as e:
-            print(f"Skipping {filepath} due to read error: {e}")
+    for path in files:
+        data = load_trace(path)
+        if data is None:
             continue
 
-        if 'version' in data and data['version'] is not None:
-            versions[f"top_level_v{data['version']}"] += 1
+        has_nacp = False
+        for _, _, _, _, nac_p, _, version in iter_points(data):
+            total_points += 1
+            nacp_counts[nac_p] += 1
+            version_counts[version] += 1
+            if nac_p is not None:
+                has_nacp = True
+        files_with_nacp += has_nacp
 
-        trace = data.get('trace', [])
-        file_has_nacp = False
+    # --- report ---
+    known = sum(v for k, v in nacp_counts.items() if k is not None)
+    print("\n=== SANITY CHECK ===")
+    print(f"Files processed:       {len(files)}")
+    print(f"Files with nac_p:      {files_with_nacp}")
+    print(f"Total points:          {total_points:,}")
+    print(f"Points with nac_p:     {known:,} ({known / max(total_points, 1):.1%})")
+    print("ADS-B versions:", dict(sorted(version_counts.items(), key=lambda x: str(x[0]))))
+    print("nac_p counts:", dict(sorted((k, v) for k, v in nacp_counts.items() if k is not None)))
 
-        for point in trace:
-            if len(point) < 3:
-                continue
+    # --- histogram (percent of points with a known nac_p) ---
+    values = list(range(12))
+    freqs = [nacp_counts.get(v, 0) for v in values]
+    pcts = [100 * f / known for f in freqs] if known else [0] * len(values)
 
-            lat, lon = point[1], point[2]
+    fig, ax = plt.subplots(figsize=(9, 6))
+    bars = ax.bar(values, pcts, edgecolor="black", color="skyblue")
 
-            # Collect ALL valid coordinates worldwide
-            if lat is not None and lon is not None:
-                world_lats.append(lat)
-                world_lons.append(lon)
+    for bar, pct, freq in zip(bars, pcts, freqs):
+        if freq > 0:
+            ax.annotate(
+                f"{pct:.1f}%",
+                (bar.get_x() + bar.get_width() / 2, bar.get_height()),
+                ha="center", va="bottom", fontsize=9,
+                xytext=(0, 2), textcoords="offset points",
+            )
 
-            # Extract nested dictionary (Index 8)
-            if len(point) > 8 and isinstance(point[8], dict):
-                info_dict = point[8]
+    ax.set_title(f"nac_p distribution ({DAY}, {len(files)} aircraft files, n={known:,} points)")
+    ax.set_xlabel("nac_p")
+    ax.set_ylabel("% of trace points")
+    ax.set_xticks(values)
+    ax.set_ylim(0, max(pcts, default=0) * 1.12 + 1)
+    ax.grid(axis="y", alpha=0.5)
+    fig.tight_layout()
+    fig.savefig(f"nacp_hist_{DAY}.png", dpi=150)
+    plt.show()
 
-                if 'nac_p' in info_dict:
-                    nacp_values.append(info_dict['nac_p'])
-                    file_has_nacp = True
 
-                if 'version' in info_dict:
-                    versions[f"trace_point_v{info_dict['version']}"] += 1
-
-        if file_has_nacp:
-            files_with_nacp_count += 1
-
-    # --- PRINT SANITY CHECK REPORTS ---
-    print("\n=== SANITY CHECK RESULTS ===")
-    print(f"Sample aircraft files processed: {total_files}")
-    print(f"Files containing ANY nac_p data: {files_with_nacp_count}")
-    print(f"Total raw points collected globally: {len(world_lats)}")
-    print("\nADS-B Versions encountered:")
-    for version_type, count in versions.items():
-        print(f"  - {version_type}: {count} occurrences")
-
-    # --- PLOTTING ---
-    if not nacp_values and not world_lats:
-        print("\nNo valid data found.")
-        return
-
-    # 1. Plot nac_p Histogram using Matplotlib
-    if nacp_values:
-        plt.figure(figsize=(8, 6))
-        plt.hist(nacp_values, bins=range(14), edgecolor='black', align='left', color='skyblue')
-        plt.title("Histogram of nac_p Values\n(Expected: Peak around 8-11)")
-        plt.xlabel("nac_p (Position Accuracy Category)")
-        plt.ylabel("Frequency (Points)")
-        plt.xticks(range(13))
-        plt.grid(axis='y', alpha=0.5)
-        plt.tight_layout()
-        plt.show()
-
-    # 2. Plot Global Map using Plotly Offline
-    if world_lats:
-        # Browser memory safety check
-        max_points_to_plot = 500000
-        if len(world_lats) > max_points_to_plot:
-            print(f"\nDownsampling {len(world_lats)} points to {max_points_to_plot} for browser stability...")
-            sampled_indices = random.sample(range(len(world_lats)), max_points_to_plot)
-            plot_lats = [world_lats[i] for i in sampled_indices]
-            plot_lons = [world_lons[i] for i in sampled_indices]
-        else:
-            plot_lats = world_lats
-            plot_lons = world_lons
-
-        df = pd.DataFrame({'Latitude': plot_lats, 'Longitude': plot_lons})
-
-        # Use natural earth projection for a better global view
-        fig = px.scatter_geo(
-            df,
-            lat="Latitude",
-            lon="Longitude",
-            title=f"Global ADS-B Coverage ({len(plot_lats):,} points)",
-            projection="natural earth"
-        )
-
-        fig.update_geos(
-            showcountries=True,
-            showcoastlines=True,
-            showland=True,
-            showocean=True,
-            landcolor="lightgray",
-            oceancolor="lightblue",
-            countrycolor="darkgray"
-        )
-
-        # Lower opacity even further for a global heatmap effect
-        fig.update_traces(marker=dict(size=1.5, color='crimson', opacity=0.02))
-
-        fig.write_html("global_map_offline.html", auto_open=True)
-
-run_adsb_sanity_checks()
+if __name__ == "__main__":
+    run_sanity_checks()
