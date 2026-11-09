@@ -4,7 +4,7 @@ Mapping GNSS interference (jamming/spoofing) from ADS-B position-quality indicat
 
 Aircraft broadcast how confident they are in their own GNSS position (**NACp**, **NIC**). When many aircraft in the same area report degraded values at the same time, that points to interference. This project turns a day of open ADS-B traces into an H3 hexagon map of where that happens.
 
-![screenshot](docs/screenshot.png)
+![screenshot](docs/screenshot.PNG)
 
 **Live demo:** _link here_
 
