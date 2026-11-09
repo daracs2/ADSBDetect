@@ -2,7 +2,6 @@ from concurrent.futures import ProcessPoolExecutor
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-
 from src.adsb_io import list_trace_files, load_trace, iter_points
 from src.config import DATA_DIR, DAY
 

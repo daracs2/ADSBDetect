@@ -1,3 +1,8 @@
+import glob
+import gzip
+import json
+
+from src.config import DATA_DIR, DAY
 
 def list_trace_files():
     return glob.glob(str(DATA_DIR / DAY / "traces" / "*" / "trace_full_*.json"))

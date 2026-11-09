@@ -1,0 +1,69 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>GNSS interference from ADS-B</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  html, body, #map { height: 100%; margin: 0; }
+  .panel { background: #fff; padding: 10px 12px; border-radius: 6px;
+           font: 13px system-ui; box-shadow: 0 1px 6px rgba(0,0,0,.4); }
+  .legend i { display: inline-block; width: 14px; height: 14px;
+              margin-right: 6px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map = L.map('map').setView([52, 25], 4);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 12,
+  attribution: '© OpenStreetMap contributors | ADS-B data: adsb.lol (ODbL)'
+}).addTo(map);
+
+const BANDS = [[0.5, '#b30000'], [0.25, '#e34a33'], [0.1, '#fc8d59'],
+               [0.03, '#fdcc8a'], [0, '#fef0d9']];
+const color = f => BANDS.find(([t]) => f >= t)[1];
+
+let data, layer, minFrac = 0.03;
+
+function draw() {
+  if (layer) layer.remove();
+  layer = L.geoJSON(data, {
+    filter: f => f.properties.frac >= minFrac,
+    style: f => ({
+      color: '#333', weight: 0.5,
+      fillColor: color(f.properties.frac),
+      fillOpacity: 0.25 + 0.55 * Math.min(1, f.properties.n / 100)
+    }),
+    onEachFeature: (f, l) => l.bindTooltip(
+      `${(f.properties.frac * 100).toFixed(1)}% degraded<br>` +
+      `${f.properties.degraded} of ${f.properties.n} aircraft-hours`)
+  }).addTo(map);
+}
+
+fetch('data/hex_daily.geojson').then(r => r.json()).then(d => { data = d; draw(); });
+
+// controls: min-fraction slider + legend
+const ctl = L.control({ position: 'topright' });
+ctl.onAdd = () => {
+  const div = L.DomUtil.create('div', 'panel legend');
+  div.innerHTML = `<b>Degraded GNSS (nac_p ≤ 5)</b><br>
+    ${BANDS.map(([t, c], i) => `<div><i style="background:${c}"></i>${
+      i === 0 ? '≥ 50%' : '≥ ' + Math.round(t * 100) + '%'}</div>`).join('')}
+    <hr>Show cells ≥ <span id="v">3</span>%<br>
+    <input id="s" type="range" min="0" max="50" value="3">`;
+  L.DomEvent.disableClickPropagation(div);
+  div.querySelector('#s').oninput = e => {
+    minFrac = e.target.value / 100;
+    div.querySelector('#v').textContent = e.target.value;
+    draw();
+  };
+  return div;
+};
+ctl.addTo(map);
+</script>
+</body>
+</html>
